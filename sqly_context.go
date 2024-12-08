@@ -22,6 +22,8 @@ type SqlyContext interface {
 	GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error
 	NamedGetContext(ctx context.Context, dest interface{}, query string, args interface{}) error
 	NamedSelectPageContext(ctx context.Context, dest interface{}, total *int64, query string, page Page) error
+	MustBeginTx(ctx context.Context, opts *sql.TxOptions) *Tx
+	BeginTxx(ctx context.Context, opts *sql.TxOptions) (*Tx, error)
 }
 
 // ConnectContext to a database and verify with a ping.
@@ -391,6 +393,12 @@ func (tx *Tx) QueryxContext(ctx context.Context, query string, args ...interface
 		return nil, err
 	}
 	return &Rows{Rows: r, unsafe: tx.unsafe, Mapper: tx.Mapper}, err
+}
+func (tx *Tx) BeginTxx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) {
+	panic("nested transactions are not allowed!")
+}
+func (tx *Tx) MustBeginTx(ctx context.Context, opts *sql.TxOptions) *Tx {
+	panic("nested transactions are not allowed!")
 }
 
 // SelectContext within a transaction and context.

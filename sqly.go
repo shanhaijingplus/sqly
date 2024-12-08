@@ -75,6 +75,8 @@ type Sqly interface {
 	Get(dest interface{}, query string, args ...interface{}) error
 	NamedGet(dest interface{}, query string, args interface{}) error
 	NamedSelectPage(dest interface{}, total *int64, query string, page Page) error
+	MustBegin() *Tx
+	Beginx() (*Tx, error)
 }
 
 // ColScanner is an interface used by MapScan and SliceScan
@@ -553,6 +555,14 @@ func (tx *Tx) Get(dest interface{}, query string, args ...interface{}) error {
 // An error is returned if the result set is empty.
 func (tx *Tx) NamedGet(dest interface{}, query string, arg interface{}) error {
 	return NamedGet(tx, dest, query, arg)
+}
+func (tx *Tx) MustBegin() *Tx {
+	panic("nested transactions are not allowed!")
+}
+
+// Beginx begins a transaction and returns an *sqlx.Tx instead of an *sql.Tx.
+func (tx *Tx) Beginx() (*Tx, error) {
+	panic("nested transactions are not allowed!")
 }
 
 // MustExec runs MustExec within a transaction.
