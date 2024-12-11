@@ -462,7 +462,7 @@ func NamedExec(e Ext, query string, arg interface{}) (sql.Result, error) {
 		return nil, err
 	}
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	exec, err := e.Exec(q, args...)
 	return exec, err
 }
