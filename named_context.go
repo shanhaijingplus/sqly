@@ -119,6 +119,12 @@ func NamedQueryContext(ctx context.Context, e ExtContext, query string, arg inte
 	if err != nil {
 		return nil, err
 	}
+	if InclusiveSliceArray(args...) {
+		q, args, err = In(q, args...)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return e.QueryxContext(ctx, q, args...)
 }
 
@@ -131,7 +137,7 @@ func NamedExecContext(ctx context.Context, e ExtContext, query string, arg inter
 		return nil, err
 	}
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	execContext, err := e.ExecContext(ctx, q, args...)
 	return execContext, err
 }

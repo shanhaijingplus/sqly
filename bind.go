@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"errors"
+	"github.com/baizeplus/sqly/reflectx"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
-
-	"github.com/baizeplus/sqly/reflectx"
 )
 
 // Bindvar types supported by Rebind, BindMap and BindStruct.
@@ -134,6 +133,17 @@ func asSliceForIn(i interface{}) (v reflect.Value, ok bool) {
 	}
 
 	return v, true
+}
+
+func InclusiveSliceArray(args ...interface{}) bool {
+
+	for _, arg := range args {
+		k := reflect.ValueOf(arg).Kind()
+		if k == reflect.Array || k == reflect.Slice {
+			return true
+		}
+	}
+	return false
 }
 
 // In expands slice values in args, returning the modified query string

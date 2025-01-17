@@ -5,15 +5,13 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
-	"time"
-
+	"github.com/baizeplus/sqly/reflectx"
 	"io/ioutil"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
-
-	"github.com/baizeplus/sqly/reflectx"
+	"time"
 )
 
 // Although the NameMapper is convenient, in practice it should not
@@ -76,7 +74,9 @@ type Sqly interface {
 	NamedSelect(dest interface{}, query string, arg interface{}) error
 	Get(dest interface{}, query string, args ...interface{}) error
 	NamedGet(dest interface{}, query string, args interface{}) error
-	NamedSelectPage(dest interface{}, total *int64, query string, arg interface{}, page *Page) error
+	NamedSelectPage(dest interface{}, total *int64, query string, page Page) error
+	MustBegin() *Tx
+	Beginx() (*Tx, error)
 }
 
 // ColScanner is an interface used by MapScan and SliceScan
@@ -338,22 +338,28 @@ func (db *DB) NamedSelect(dest interface{}, query string, arg interface{}) error
 
 // NamedSelectPage using this DB.
 // Any named placeholder parameters are replaced with fields from arg.
-func (db *DB) NamedSelectPage(dest interface{}, total *int64, query string, arg interface{}, page *Page) error {
-	countRow, err := db.NamedQuery(sqlFormatCount(query), arg)
+func (db *DB) NamedSelectPage(dest interface{}, total *int64, query string, page Page) error {
+	t := int64(0)
+	countRow, err := db.NamedQuery(sqlFormatCount(query), page)
 	if err != nil {
 		return err
 	}
 	defer countRow.Close()
 	if countRow.Next() {
-		err = countRow.Scan(total)
+		err = countRow.Scan(&t)
 		if err != nil {
 			return err
 		}
 	}
-	if *total <= page.GetOffset() {
+	*total = t
+	if t <= (page.GetPage()-1)*page.GetSize() {
+		v := reflect.ValueOf(dest)
+		elemType := v.Elem().Type().Elem()
+		newSlice := reflect.MakeSlice(reflect.SliceOf(elemType), 0, 0)
+		v.Elem().Set(newSlice)
 		return nil
 	}
-	return NamedSelect(db, dest, sqlFormatPage(BindType(db.DriverName()), query, page), arg)
+	return NamedSelect(db, dest, sqlFormatPage(BindType(db.DriverName()), query, page), page)
 }
 
 // Get using this DB.
@@ -393,7 +399,7 @@ func (db *DB) Beginx() (*Tx, error) {
 // Any placeholder parameters are replaced with supplied args.
 func (db *DB) Queryx(query string, args ...interface{}) (*Rows, error) {
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	r, err := db.DB.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -405,7 +411,7 @@ func (db *DB) Queryx(query string, args ...interface{}) (*Rows, error) {
 // Any placeholder parameters are replaced with supplied args.
 func (db *DB) QueryRowx(query string, args ...interface{}) *Row {
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	rows, err := db.DB.Query(query, args...)
 	return &Row{rows: rows, err: err, unsafe: db.unsafe, Mapper: db.Mapper}
 }
@@ -414,7 +420,7 @@ func (db *DB) QueryRowx(query string, args ...interface{}) *Row {
 // Any placeholder parameters are replaced with supplied args.
 func (db *DB) MustExec(query string, args ...interface{}) sql.Result {
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	exec := MustExec(db, query, args...)
 	return exec
 }
@@ -492,29 +498,35 @@ func (tx *Tx) NamedSelect(dest interface{}, query string, arg interface{}) error
 
 // NamedSelectPage a named query within a transaction.
 // Any named placeholder parameters are replaced with fields from arg.
-func (tx *Tx) NamedSelectPage(dest interface{}, total *int64, query string, arg interface{}, page *Page) error {
-	countRow, err := tx.NamedQuery(sqlFormatCount(query), arg)
+func (tx *Tx) NamedSelectPage(dest interface{}, total *int64, query string, page Page) error {
+	t := int64(0)
+	countRow, err := tx.NamedQuery(sqlFormatCount(query), page)
 	if err != nil {
 		return err
 	}
 	defer countRow.Close()
 	if countRow.Next() {
-		err = countRow.Scan(total)
+		err = countRow.Scan(&t)
 		if err != nil {
 			return err
 		}
 	}
-	if *total <= page.GetOffset() {
+	*total = t
+	if t <= (page.GetPage()-1)*page.GetSize() {
+		v := reflect.ValueOf(dest)
+		elemType := v.Elem().Type().Elem()
+		newSlice := reflect.MakeSlice(reflect.SliceOf(elemType), 0, 0)
+		v.Elem().Set(newSlice)
 		return nil
 	}
-	return NamedSelect(tx, dest, sqlFormatPage(BindType(tx.DriverName()), query, page), arg)
+	return NamedSelect(tx, dest, sqlFormatPage(BindType(tx.DriverName()), query, page), page)
 }
 
 // Queryx within a transaction.
 // Any placeholder parameters are replaced with supplied args.
 func (tx *Tx) Queryx(query string, args ...interface{}) (*Rows, error) {
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	r, err := tx.Tx.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -526,7 +538,7 @@ func (tx *Tx) Queryx(query string, args ...interface{}) (*Rows, error) {
 // Any placeholder parameters are replaced with supplied args.
 func (tx *Tx) QueryRowx(query string, args ...interface{}) *Row {
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	rows, err := tx.Tx.Query(query, args...)
 	return &Row{rows: rows, err: err, unsafe: tx.unsafe, Mapper: tx.Mapper}
 }
@@ -543,6 +555,14 @@ func (tx *Tx) Get(dest interface{}, query string, args ...interface{}) error {
 // An error is returned if the result set is empty.
 func (tx *Tx) NamedGet(dest interface{}, query string, arg interface{}) error {
 	return NamedGet(tx, dest, query, arg)
+}
+func (tx *Tx) MustBegin() *Tx {
+	panic("nested transactions are not allowed!")
+}
+
+// Beginx begins a transaction and returns an *sqlx.Tx instead of an *sql.Tx.
+func (tx *Tx) Beginx() (*Tx, error) {
+	panic("nested transactions are not allowed!")
 }
 
 // MustExec runs MustExec within a transaction.
@@ -808,7 +828,7 @@ func LoadFile(e Execer, path string) (*sql.Result, error) {
 // Any placeholder parameters are replaced with supplied args.
 func MustExec(e Execer, query string, args ...interface{}) sql.Result {
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	res, err := e.Exec(query, args...)
 	if err != nil {
 		panic(err)
@@ -1027,9 +1047,9 @@ func scanAll(rows rowsi, dest interface{}, structOnly bool) error {
 		var values []interface{}
 		var m *reflectx.Mapper
 
-		switch rows.(type) {
+		switch rows := rows.(type) {
 		case *Rows:
-			m = rows.(*Rows).Mapper
+			m = rows.Mapper
 		default:
 			m = mapper()
 		}
@@ -1078,7 +1098,12 @@ func scanAll(rows rowsi, dest interface{}, structOnly bool) error {
 			}
 		}
 	}
-
+	dv := reflect.ValueOf(dest)
+	if dv.IsNil() || dv.Elem().IsNil() {
+		elemType := dv.Elem().Type().Elem()
+		newSlice := reflect.MakeSlice(reflect.SliceOf(elemType), 0, 0)
+		dv.Elem().Set(newSlice)
+	}
 	return rows.Err()
 }
 

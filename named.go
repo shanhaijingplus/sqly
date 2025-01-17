@@ -175,7 +175,7 @@ func bindArgs(names []string, arg interface{}, m *reflectx.Mapper) ([]interface{
 	arglist := make([]interface{}, 0, len(names))
 
 	// grab the indirected value of arg
-	v := reflect.ValueOf(arg)
+	var v reflect.Value
 	for v = reflect.ValueOf(arg); v.Kind() == reflect.Ptr; {
 		v = v.Elem()
 	}
@@ -444,6 +444,12 @@ func NamedQuery(e Ext, query string, arg interface{}) (*Rows, error) {
 	if err != nil {
 		return nil, err
 	}
+	if InclusiveSliceArray(args...) {
+		q, args, err = In(q, args...)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return e.Queryx(q, args...)
 }
 
@@ -456,7 +462,7 @@ func NamedExec(e Ext, query string, arg interface{}) (sql.Result, error) {
 		return nil, err
 	}
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	exec, err := e.Exec(q, args...)
 	return exec, err
 }

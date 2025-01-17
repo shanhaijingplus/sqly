@@ -21,7 +21,9 @@ type SqlyContext interface {
 	NamedSelectContext(ctx context.Context, dest interface{}, query string, arg interface{}) error
 	GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error
 	NamedGetContext(ctx context.Context, dest interface{}, query string, args interface{}) error
-	NamedSelectPageContext(ctx context.Context, dest interface{}, total *int64, query string, arg interface{}, page *Page) error
+	NamedSelectPageContext(ctx context.Context, dest interface{}, total *int64, query string, page Page) error
+	MustBeginTx(ctx context.Context, opts *sql.TxOptions) *Tx
+	BeginTxx(ctx context.Context, opts *sql.TxOptions) (*Tx, error)
 }
 
 // ConnectContext to a database and verify with a ping.
@@ -124,7 +126,7 @@ func LoadFileContext(ctx context.Context, e ExecerContext, path string) (*sql.Re
 // Any placeholder parameters are replaced with supplied args.
 func MustExecContext(ctx context.Context, e ExecerContext, query string, args ...interface{}) sql.Result {
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	res, err := e.ExecContext(ctx, query, args...)
 	if err != nil {
 		panic(err)
@@ -163,24 +165,29 @@ func (db *DB) NamedSelectContext(ctx context.Context, dest interface{}, query st
 
 // NamedSelectPageContext  using this DB.
 // Any named placeholder parameters are replaced with fields from arg.
-func (db *DB) NamedSelectPageContext(ctx context.Context, dest interface{}, total *int64, query string, arg interface{}, page *Page) error {
-
-	countRow, err := db.NamedQueryContext(ctx, sqlFormatCount(query), arg)
+func (db *DB) NamedSelectPageContext(ctx context.Context, dest interface{}, total *int64, query string, page Page) error {
+	t := int64(0)
+	countRow, err := db.NamedQueryContext(ctx, sqlFormatCount(query), page)
 	if err != nil {
 		return err
 	}
 	defer countRow.Close()
 	if countRow.Next() {
-		err = countRow.Scan(total)
+		err = countRow.Scan(&t)
 		if err != nil {
 			return err
 		}
 	}
-	if *total <= page.GetOffset() {
+	*total = t
+	if t <= (page.GetPage()-1)*page.GetSize() {
+		v := reflect.ValueOf(dest)
+		elemType := v.Elem().Type().Elem()
+		newSlice := reflect.MakeSlice(reflect.SliceOf(elemType), 0, 0)
+		v.Elem().Set(newSlice)
 		return nil
 	}
 
-	return NamedSelectContext(ctx, db, dest, sqlFormatPage(BindType(db.DriverName()), query, page), arg)
+	return NamedSelectContext(ctx, db, dest, sqlFormatPage(BindType(db.DriverName()), query, page), page)
 }
 
 // GetContext using this DB.
@@ -209,7 +216,7 @@ func (db *DB) PreparexContext(ctx context.Context, query string) (*Stmt, error) 
 // Any placeholder parameters are replaced with supplied args.
 func (db *DB) QueryxContext(ctx context.Context, query string, args ...interface{}) (*Rows, error) {
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	r, err := db.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -221,7 +228,7 @@ func (db *DB) QueryxContext(ctx context.Context, query string, args ...interface
 // Any placeholder parameters are replaced with supplied args.
 func (db *DB) QueryRowxContext(ctx context.Context, query string, args ...interface{}) *Row {
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	rows, err := db.DB.QueryContext(ctx, query, args...)
 	return &Row{rows: rows, err: err, unsafe: db.unsafe, Mapper: db.Mapper}
 }
@@ -380,12 +387,18 @@ func (tx *Tx) MustExecContext(ctx context.Context, query string, args ...interfa
 // Any placeholder parameters are replaced with supplied args.
 func (tx *Tx) QueryxContext(ctx context.Context, query string, args ...interface{}) (*Rows, error) {
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	r, err := tx.Tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	return &Rows{Rows: r, unsafe: tx.unsafe, Mapper: tx.Mapper}, err
+}
+func (tx *Tx) BeginTxx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) {
+	panic("nested transactions are not allowed!")
+}
+func (tx *Tx) MustBeginTx(ctx context.Context, opts *sql.TxOptions) *Tx {
+	panic("nested transactions are not allowed!")
 }
 
 // SelectContext within a transaction and context.
@@ -396,22 +409,28 @@ func (tx *Tx) SelectContext(ctx context.Context, dest interface{}, query string,
 
 // NamedSelectPageContext a named query within a transaction.
 // Any named placeholder parameters are replaced with fields from arg.
-func (tx *Tx) NamedSelectPageContext(ctx context.Context, dest interface{}, total *int64, query string, arg interface{}, page *Page) error {
-	countRow, err := tx.NamedQueryContext(ctx, sqlFormatCount(query), arg)
+func (tx *Tx) NamedSelectPageContext(ctx context.Context, dest interface{}, total *int64, query string, page Page) error {
+	t := int64(0)
+	countRow, err := tx.NamedQueryContext(ctx, sqlFormatCount(query), page)
 	if err != nil {
 		return err
 	}
 	defer countRow.Close()
 	if countRow.Next() {
-		err = countRow.Scan(total)
+		err = countRow.Scan(&t)
 		if err != nil {
 			return err
 		}
 	}
-	if *total <= page.GetOffset() {
+	*total = t
+	if t <= (page.GetPage()-1)*page.GetSize() {
+		v := reflect.ValueOf(dest)
+		elemType := v.Elem().Type().Elem()
+		newSlice := reflect.MakeSlice(reflect.SliceOf(elemType), 0, 0)
+		v.Elem().Set(newSlice)
 		return nil
 	}
-	return NamedSelectContext(ctx, tx, dest, sqlFormatPage(BindType(tx.DriverName()), query, page), arg)
+	return NamedSelectContext(ctx, tx, dest, sqlFormatPage(BindType(tx.DriverName()), query, page), page)
 }
 
 // NamedSelectContext using this Tx.
@@ -438,7 +457,7 @@ func (tx *Tx) NamedGetContext(ctx context.Context, dest interface{}, query strin
 // Any placeholder parameters are replaced with supplied args.
 func (tx *Tx) QueryRowxContext(ctx context.Context, query string, args ...interface{}) *Row {
 	start := time.Now()
-	defer Lg.Debug(time.Since(start), query, args)
+	defer Lg.Debug(time.Since(start), query, args...)
 	rows, err := tx.Tx.QueryContext(ctx, query, args...)
 	return &Row{rows: rows, err: err, unsafe: tx.unsafe, Mapper: tx.Mapper}
 }
